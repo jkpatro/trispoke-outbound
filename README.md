@@ -82,11 +82,15 @@ The Apollo push worker (`trispoke.sender.apollo_push_worker`) will pick the firs
 
 V1.5 supports three intake paths into the same enrich → pain → generate → QC → review → push pipeline:
 
-- **Apollo CSV upload** (`apollo_csv`) — bulk import from a `.xlsx`/`.csv` exported from Apollo's search UI.
-- **Apollo search query** (`apollo_search`) — drive Apollo search directly from V1's campaign settings (titles, industries, sizes, locations, keywords). Preview top 10 matches, then bulk-add up to 500 with one click.
+- **Apollo CSV upload** (`apollo_csv`) — bulk import from a `.xlsx`/`.csv` exported from Apollo's search UI. → see [samples/import_template.csv](samples/import_template.csv) for the expected column shape.
+- **Apollo search query** (`apollo_search`) — drive Apollo search directly from V1's campaign settings (titles, industries, sizes, locations, keywords). Preview top 10 matches, then bulk-add up to 500 with one click. → see [samples/apollo_search_result_sample.json](samples/apollo_search_result_sample.json) for the API response shape and which fields trispoke reads.
 - **Single-lead manual form** (`manual_form`) — type one lead in. The lead enters status `new` and waits for the normal pipeline; it does NOT auto-generate.
 
 The intake source is tagged on each lead and shown as an icon in the review queue (📁 / 🔍 / ✍️). The Excel export includes it as a column.
+
+The review-queue export button produces a 26-column `.xlsx` — see [samples/export_sample.csv](samples/export_sample.csv) (same shape, CSV for easy diff viewing) for what to expect.
+
+Full documentation of all three samples lives in [samples/README.md](samples/README.md).
 
 ## Sending mode: Apollo (default) vs SMTP direct (legacy)
 

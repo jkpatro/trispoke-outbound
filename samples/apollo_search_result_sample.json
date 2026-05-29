@@ -1,0 +1,143 @@
+{
+  "_comment": "Sample response from Apollo's /api/v1/mixed_people/api_search endpoint. This is what the 'Apollo search query' intake path receives, parses, and inserts into the leads table with intake_source='apollo_search'. trispoke reads `people[*].email` plus `first_name`, `last_name`, `title`, `organization.name`, `organization.website_url`, `linkedin_url`, and `id`. People without an email are skipped.",
+  "_request_example": {
+    "url": "POST https://api.apollo.io/api/v1/mixed_people/api_search",
+    "headers": {
+      "x-api-key": "your_apollo_api_key",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "person_titles": ["CEO", "VP Operations"],
+      "person_locations": ["Bhubaneswar", "Mumbai"],
+      "organization_num_employees_ranges": ["50,200"],
+      "q_keywords": "pharmaceutical",
+      "page": 1,
+      "per_page": 10
+    }
+  },
+  "people": [
+    {
+      "id": "5f7b8c9d2e3a4b5c6d7e8f90",
+      "first_name": "Marcus",
+      "last_name": "Allen",
+      "name": "Marcus Allen",
+      "title": "Founder & CEO",
+      "email": "marcus@lumen-analytics.example",
+      "email_status": "verified",
+      "linkedin_url": "https://www.linkedin.com/in/marcus-allen-lumen",
+      "photo_url": null,
+      "headline": "Founder & CEO at Lumen Analytics",
+      "city": "Austin",
+      "state": "Texas",
+      "country": "United States",
+      "organization": {
+        "id": "5a1b2c3d4e5f6a7b8c9d0e1f",
+        "name": "Lumen Analytics",
+        "website_url": "https://lumen-analytics.example.com",
+        "primary_domain": "lumen-analytics.example.com",
+        "industry": "SaaS",
+        "estimated_num_employees": 18,
+        "founded_year": 2021,
+        "city": "Austin",
+        "state": "Texas",
+        "country": "United States"
+      }
+    },
+    {
+      "id": "5f7b8c9d2e3a4b5c6d7e8f91",
+      "first_name": "Priya",
+      "last_name": "Sharma",
+      "name": "Priya Sharma",
+      "title": "VP Sales",
+      "email": "priya@northwind-logistics.example",
+      "email_status": "verified",
+      "linkedin_url": "https://www.linkedin.com/in/priya-sharma-northwind",
+      "photo_url": null,
+      "headline": "VP Sales — Northwind Logistics",
+      "city": "Mumbai",
+      "state": "Maharashtra",
+      "country": "India",
+      "organization": {
+        "id": "5a1b2c3d4e5f6a7b8c9d0e20",
+        "name": "Northwind Logistics",
+        "website_url": "https://northwind.example.com",
+        "primary_domain": "northwind.example.com",
+        "industry": "Logistics & Supply Chain",
+        "estimated_num_employees": 340,
+        "founded_year": 2012,
+        "city": "Mumbai",
+        "state": "Maharashtra",
+        "country": "India"
+      }
+    },
+    {
+      "id": "5f7b8c9d2e3a4b5c6d7e8f92",
+      "first_name": "Ben",
+      "last_name": "Carter",
+      "name": "Ben Carter",
+      "title": "VP Operations",
+      "email": "ben@apex-it-staffing.example",
+      "email_status": "verified",
+      "linkedin_url": "https://www.linkedin.com/in/ben-carter-apex",
+      "photo_url": null,
+      "headline": "VP Operations at Apex IT Staffing",
+      "city": "Chicago",
+      "state": "Illinois",
+      "country": "United States",
+      "organization": {
+        "id": "5a1b2c3d4e5f6a7b8c9d0e21",
+        "name": "Apex IT Staffing",
+        "website_url": "https://apex-it-staffing.example.com",
+        "primary_domain": "apex-it-staffing.example.com",
+        "industry": "IT Staffing",
+        "estimated_num_employees": 210,
+        "founded_year": 2015,
+        "city": "Chicago",
+        "state": "Illinois",
+        "country": "United States"
+      }
+    },
+    {
+      "id": "5f7b8c9d2e3a4b5c6d7e8f93",
+      "first_name": "Sara",
+      "last_name": null,
+      "name": "Sara",
+      "title": "Chief Operating Officer",
+      "email": null,
+      "email_status": "unavailable",
+      "_skipped_by_trispoke": "no email — leads without a usable address are filtered out at insert time",
+      "linkedin_url": "https://www.linkedin.com/in/sara-anonymous",
+      "headline": "COO at confidential",
+      "organization": {
+        "name": "Confidential",
+        "website_url": null
+      }
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 10,
+    "total_entries": 1247,
+    "total_pages": 125
+  },
+  "breadcrumbs": [
+    {
+      "label": "Job Title",
+      "signal_field_name": "person_titles",
+      "value": "CEO",
+      "display_name": "CEO"
+    },
+    {
+      "label": "Job Title",
+      "signal_field_name": "person_titles",
+      "value": "VP Operations",
+      "display_name": "VP Operations"
+    },
+    {
+      "label": "Location",
+      "signal_field_name": "person_locations",
+      "value": "Bhubaneswar",
+      "display_name": "Bhubaneswar"
+    }
+  ]
+}
