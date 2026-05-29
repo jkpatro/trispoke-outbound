@@ -97,7 +97,7 @@ def test_create_or_update_contact_raises_on_empty_response(fake_client):
 
 def test_search_contacts_posts_query_with_pagination(fake_client):
     fake_client.client.request.return_value = _resp(
-        {"contacts": [{"id": "1"}], "pagination": {"page": 2, "per_page": 10}}
+        {"people": [{"id": "1"}], "pagination": {"page": 2, "per_page": 10}}
     )
     body = fake_client.search_contacts(
         {"person_titles": ["VP Sales"], "q_keywords": "logistics"},
@@ -105,7 +105,10 @@ def test_search_contacts_posts_query_with_pagination(fake_client):
         page_size=10,
     )
     assert body["pagination"]["page"] == 2
+    method, url = fake_client.client.request.call_args[0][:2]
     sent = fake_client.client.request.call_args[1]["json"]
+    # Endpoint changed to api_search (old /mixed_people/search is deprecated).
+    assert url.endswith("/mixed_people/api_search")
     assert sent["person_titles"] == ["VP Sales"]
     assert sent["q_keywords"] == "logistics"
     assert sent["page"] == 2

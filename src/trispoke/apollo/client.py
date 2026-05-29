@@ -135,16 +135,22 @@ class ApolloClient:
     def search_contacts(
         self, query: Dict[str, Any], page: int = 1, page_size: int = 25
     ) -> Dict[str, Any]:
-        """People-search by criteria. Returns Apollo's paginated envelope.
+        """People-search by criteria.
 
-        `query` keys that Apollo accepts here:
-          person_titles, q_organization_name,
-          organization_num_employees_ranges, person_locations, q_keywords
+        Uses /mixed_people/api_search — the legacy /mixed_people/search is
+        deprecated for API callers (returns 422 with a deprecation notice).
+
+        `query` keys Apollo accepts:
+          person_titles                       list[str]
+          person_locations                    list[str]
+          organization_num_employees_ranges   list[str] — each as "min,max"
+          q_keywords                          str
+          q_organization_name                 str
         """
         payload = {**query, "page": page, "per_page": page_size}
         response = self._retry_request(
             "POST",
-            f"{self.base_url}/mixed_people/search",
+            f"{self.base_url}/mixed_people/api_search",
             json=payload,
         )
         return response.json()

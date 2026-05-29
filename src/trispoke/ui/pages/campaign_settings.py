@@ -168,35 +168,43 @@ def _render_search_intake() -> None:
         key="search_industries",
     )
     sizes = st.text_input(
-        "Employee count ranges (comma-separated, e.g. 50,100 or 1,10)",
+        "Employee count range (one range like 50,100; use ; for multiple, e.g. 1,10; 50,100)",
         placeholder="50,200",
         key="search_sizes",
     )
     locations = st.text_input(
-        "Locations (comma-separated)",
-        placeholder="Toronto, Canada",
+        "Locations (separate multiple with ;)",
+        placeholder="Bhubaneswar; Toronto",
         key="search_locations",
     )
-    keywords = st.text_input("Keywords (optional)", key="search_keywords")
+    keywords = st.text_input(
+        "Keywords (free-text, includes industry / company names)",
+        placeholder="pharmaceutical Ezrx",
+        key="search_keywords",
+    )
 
     def _build_query() -> dict:
         q: dict = {}
         if titles.strip():
             q["person_titles"] = [s.strip() for s in titles.split(",") if s.strip()]
-        if industries.strip():
-            q["q_organization_keyword_tags"] = [
-                s.strip() for s in industries.split(",") if s.strip()
-            ]
-        if sizes.strip():
-            q["organization_num_employees_ranges"] = [
-                s.strip() for s in sizes.split(",") if s.strip()
-            ]
         if locations.strip():
             q["person_locations"] = [
-                s.strip() for s in locations.split(",") if s.strip()
+                s.strip() for s in locations.split(";") if s.strip()
             ]
+        if sizes.strip():
+            # Each range is one "min,max" string. Multiple ranges via ';'.
+            q["organization_num_employees_ranges"] = [
+                s.strip() for s in sizes.split(";") if "," in s
+            ]
+        # Industries are folded into q_keywords because Apollo's industry-tag
+        # param requires plan-specific tag IDs (not free-text on this tier).
+        kw_parts = []
+        if industries.strip():
+            kw_parts.append(industries.strip())
         if keywords.strip():
-            q["q_keywords"] = keywords.strip()
+            kw_parts.append(keywords.strip())
+        if kw_parts:
+            q["q_keywords"] = " ".join(kw_parts)
         return q
 
     cols = st.columns([1, 1])
@@ -204,19 +212,31 @@ def _render_search_intake() -> None:
         try:
             ac = ApolloClient()
             body = ac.search_contacts(_build_query(), page=1, page_size=10)
-            contacts = body.get("contacts") or body.get("people") or []
-            total = body.get("pagination", {}).get("total_entries", len(contacts))
-            st.session_state["search_preview"] = contacts
-            st.success(f"{total} match(es) total — showing first {len(contacts)}.")
+            # Apollo's api_search returns `people`; legacy `contacts` kept as fallback.
+            results = body.get("people") or body.get("contacts") or []
+            total = body.get("pagination", {}).get(
+                "total_entries", len(results)
+            )
+            st.session_state["search_preview"] = results
+            if results:
+                st.success(
+                    f"{len(results)} shown"
+                    + (f" of {total} total" if total else "")
+                )
+            else:
+                st.warning(
+                    "No matches. Try broader keywords or a wider employee range."
+                )
         except Exception as e:
             st.error(f"Search failed: {e}")
 
     preview = st.session_state.get("search_preview") or []
     if preview:
         for c in preview[:10]:
+            org_name = (c.get("organization") or {}).get("name", "")
             st.markdown(
-                f"- **{c.get('first_name','')} {c.get('last_name','')}** "
-                f"· {c.get('title','')} · {(c.get('organization') or {}).get('name','')}"
+                f"- **{c.get('first_name','') or ''} {c.get('last_name','') or ''}** "
+                f"· {c.get('title','') or '—'} · {org_name or '—'}"
             )
 
     if cols[1].button(
@@ -351,7 +371,7 @@ def _bulk_add_search_results(apollo, query: dict, campaign_name: str) -> int:
             raise RuntimeError(f"campaign '{campaign_name}' missing")
         while inserted < cap:
             body = apollo.search_contacts(query, page=page, page_size=25)
-            contacts = body.get("contacts") or body.get("people") or []
+            contacts = body.get("people") or body.get("contacts") or []
             if not contacts:
                 break
             for c in contacts:
