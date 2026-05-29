@@ -1,0 +1,119 @@
+# trispoke-outbound — production stack (Linux).
+#
+# Services:
+#   db       Postgres 16 (private, internal only)
+#   ollama   Local LLM runtime (private + 11434 exposed for debugging)
+#   migrate  One-shot: runs `alembic upgrade head` then exits
+#   app      Streamlit UI on http://localhost:8501
+#   sender   Sender daemon
+#   imap     IMAP poller daemon
+#
+# Usage:
+#   docker compose build
+#   docker compose up -d
+#   docker compose exec ollama ollama pull qwen3:8b   # one-time
+#   open http://localhost:8501
+
+services:
+
+  # ---------- DB ----------
+  db:
+    image: postgres:16-alpine
+    container_name: trispoke-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-trispoke}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-trispoke}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trispoke} -d ${POSTGRES_DB:-trispoke}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    # No ports: published — DB is internal-only. Use `docker compose exec
+    # db psql` for ad-hoc queries.
+
+  # ---------- Ollama ----------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: trispoke-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"   # bound to localhost only
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # ---------- Migrations (one-shot) ----------
+  migrate:
+    build: .
+    container_name: trispoke-migrate
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-trispoke}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-trispoke}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  # ---------- App (Streamlit UI) ----------
+  app:
+    build: .
+    container_name: trispoke-app
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-trispoke}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-trispoke}
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    # No bind-mount of ./src — true production image, source baked in.
+
+  # ---------- Sender daemon ----------
+  sender:
+    build: .
+    container_name: trispoke-sender
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-trispoke}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-trispoke}
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    command: ["python", "-m", "trispoke.sender.sender_loop"]
+
+  # ---------- IMAP poller daemon ----------
+  imap:
+    build: .
+    container_name: trispoke-imap
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-trispoke}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-trispoke}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "trispoke.receiver.imap_poller"]
+
+
+volumes:
+  db_data:        # Postgres datadir — survives `docker compose down`,
+                  # nuked only by `docker compose down -v`.
+  ollama_data:    # Model cache (~5 GB after qwen3:8b).
