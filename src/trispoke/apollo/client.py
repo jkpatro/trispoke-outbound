@@ -266,40 +266,63 @@ class ApolloClient:
 
         # 7. (optional) Add a follow-up step.
         if follow_up_template:
-            fu_step_payload = {
-                "emailer_campaign_id": sequence_id,
-                "position": 2,
-                "type": "auto_email",
-                "wait_time": int(follow_up_template.get("wait_days_after", 4)),
-                "wait_mode": "day",
-            }
-            fu_step_resp = self._retry_request(
-                "POST", f"{self.base_url}/emailer_steps", json=fu_step_payload
-            )
-            fu_step = fu_step_resp.json().get("emailer_step") or fu_step_resp.json()
-            fu_step_id = fu_step.get("id")
-            if not fu_step_id:
-                raise RuntimeError(
-                    f"Apollo did not return a follow-up step id: {fu_step_resp.json()!r}"
-                )
-
-            fu_touch_id, fu_template_id = self._find_touch_and_template_for_step(
-                sequence_id, fu_step_id
-            )
-            self.update_template(
-                fu_template_id,
-                subject=follow_up_template.get("subject", ""),
-                body_html=follow_up_template.get("body_html", ""),
-                body_text=follow_up_template.get("body_text", ""),
-            )
-            self._retry_request(
-                "POST", f"{self.base_url}/emailer_touches/{fu_touch_id}/approve"
-            )
-            out["followup_step_id"] = fu_step_id
-            out["followup_touch_id"] = fu_touch_id
-            out["followup_template_id"] = fu_template_id
+            fu = self.add_followup_step(sequence_id, follow_up_template)
+            out["followup_step_id"] = fu["step_id"]
+            out["followup_touch_id"] = fu["touch_id"]
+            out["followup_template_id"] = fu["template_id"]
 
         return out
+
+    def add_followup_step(
+        self,
+        sequence_id: str,
+        template: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Append a follow-up step to an existing sequence.
+
+        Used both at sequence creation time (via create_sequence) and to
+        retroactively upgrade single-step slots. Apollo accepts new steps
+        on active sequences — no need to deactivate first.
+
+        `template` provides: subject, body_html, body_text, wait_days_after.
+
+        Returns:
+          {"step_id": str, "touch_id": str, "template_id": str}
+        """
+        step_payload = {
+            "emailer_campaign_id": sequence_id,
+            "position": 2,
+            "type": "auto_email",
+            "wait_time": int(template.get("wait_days_after", 4)),
+            "wait_mode": "day",
+        }
+        step_resp = self._retry_request(
+            "POST", f"{self.base_url}/emailer_steps", json=step_payload
+        )
+        step = step_resp.json().get("emailer_step") or step_resp.json()
+        step_id = step.get("id")
+        if not step_id:
+            raise RuntimeError(
+                f"Apollo did not return a follow-up step id: {step_resp.json()!r}"
+            )
+
+        touch_id, template_id = self._find_touch_and_template_for_step(
+            sequence_id, step_id
+        )
+        self.update_template(
+            template_id,
+            subject=template.get("subject", ""),
+            body_html=template.get("body_html", ""),
+            body_text=template.get("body_text", ""),
+        )
+        self._retry_request(
+            "POST", f"{self.base_url}/emailer_touches/{touch_id}/approve"
+        )
+        return {
+            "step_id": step_id,
+            "touch_id": touch_id,
+            "template_id": template_id,
+        }
 
     def update_template(
         self,
