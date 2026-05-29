@@ -271,37 +271,46 @@ def _render_manual_intake() -> None:
         st.error("Save the campaign first, then add leads.")
         return
 
-    _insert_manual_lead(
-        campaign_name=campaign_name,
-        first_name=first.strip(),
-        last_name=last.strip(),
-        email=email.strip(),
-        title=title.strip(),
-        company_name=company.strip(),
-        company_domain=domain.strip(),
-        linkedin_url=linkedin.strip() or None,
-    )
+    try:
+        _insert_manual_lead(
+            campaign_name=campaign_name,
+            first_name=first.strip(),
+            last_name=last.strip(),
+            email=email.strip(),
+            title=title.strip(),
+            company_name=company.strip(),
+            company_domain=domain.strip(),
+            linkedin_url=linkedin.strip() or None,
+        )
+    except ValueError as e:
+        st.error(str(e))
+        return
     st.success(
-        "Lead added. Will be processed in the next enrichment cycle "
-        "(no immediate draft generation)."
+        "Lead added. The pipeline runner will enrich, generate a draft, and "
+        "QC-check it in the next cycle."
     )
 
 
 def _insert_manual_lead(**fields) -> int:
     """Insert a single lead with intake_source='manual_form' and status='new'.
-    Returns the new lead id."""
+    Returns the new lead id (or 0 if skipped as unsubscribed)."""
     import json as _json
 
     from trispoke.db.models import Campaign as _C
     from trispoke.db.models import Lead as _L
     from trispoke.db.models import LeadStatus as _LS
     from trispoke.db.session import get_session as _gs
+    from trispoke.db.unsubscribe import is_unsubscribed as _is_unsubbed
 
     campaign_name = fields.pop("campaign_name")
     with _gs() as session:
         campaign = session.query(_C).filter_by(name=campaign_name).first()
         if not campaign:
             raise RuntimeError(f"campaign '{campaign_name}' missing")
+        if _is_unsubbed(session, fields.get("email", "")):
+            raise ValueError(
+                f"Cannot add {fields.get('email')} — globally unsubscribed."
+            )
         lead = _L(
             campaign_id=campaign.id,
             intake_source="manual_form",
@@ -315,15 +324,20 @@ def _insert_manual_lead(**fields) -> int:
 
 
 def _bulk_add_search_results(apollo, query: dict, campaign_name: str) -> int:
-    """V1.5: pull up to 500 search results and insert as new leads."""
+    """V1.5: pull up to 500 search results and insert as new leads.
+
+    V1.5.2: globally-unsubscribed emails are filtered out before insert.
+    """
     import json as _json
 
     from trispoke.db.models import Campaign as _C
     from trispoke.db.models import Lead as _L
     from trispoke.db.models import LeadStatus as _LS
     from trispoke.db.session import get_session as _gs
+    from trispoke.db.unsubscribe import is_unsubscribed as _is_unsubbed
 
     inserted = 0
+    skipped_unsubbed = 0
     cap = 500
     page = 1
     with _gs() as session:
@@ -340,6 +354,9 @@ def _bulk_add_search_results(apollo, query: dict, campaign_name: str) -> int:
                     break
                 email_addr = c.get("email")
                 if not email_addr:
+                    continue
+                if _is_unsubbed(session, email_addr):
+                    skipped_unsubbed += 1
                     continue
                 exists = (
                     session.query(_L)
@@ -369,6 +386,8 @@ def _bulk_add_search_results(apollo, query: dict, campaign_name: str) -> int:
             page += 1
             if len(contacts) < 25:
                 break
+    if skipped_unsubbed:
+        print(f"[search-intake] skipped {skipped_unsubbed} unsubscribed address(es)")
     return inserted
 
 
@@ -769,11 +788,18 @@ def _save_campaign(*, name: str, mode: str, sending_mode: str = "apollo") -> int
                 # Allow leads without an email column — they'll need waterfall.
                 return campaign.id
 
+            from trispoke.db.unsubscribe import is_unsubscribed as _is_unsubbed
+            skipped_unsubbed = 0
             for _, row in df.iterrows():
                 raw_email = row[email_col]
                 if pd.isna(raw_email) or not str(raw_email).strip():
                     continue
                 email_addr = str(raw_email).strip()
+
+                # V1.5.2: skip globally-unsubscribed addresses
+                if _is_unsubbed(session, email_addr):
+                    skipped_unsubbed += 1
+                    continue
 
                 exists = (
                     session.query(Lead)
@@ -797,6 +823,14 @@ def _save_campaign(*, name: str, mode: str, sending_mode: str = "apollo") -> int
                 )
                 session.add(lead)
             session.commit()
+            if skipped_unsubbed:
+                # Surface to the Streamlit UI so the user sees what got dropped
+                try:
+                    st.info(
+                        f"Skipped {skipped_unsubbed} address(es) — globally unsubscribed."
+                    )
+                except Exception:
+                    pass
 
         return campaign.id
 

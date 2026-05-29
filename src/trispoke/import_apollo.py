@@ -6,6 +6,7 @@ import openpyxl
 from trispoke.db.session import get_session
 from trispoke.db.models import Lead, Campaign, LeadStatus
 from trispoke.db.event_log import log_event
+from trispoke.db.unsubscribe import is_unsubscribed
 from trispoke.config import get_settings
 
 settings = get_settings()
@@ -84,7 +85,13 @@ def import_leads(file_path: str, campaign_name: str):
             session.commit()
 
         imported_count = 0
+        skipped_unsubscribed = 0
         for lead_data in leads_data:
+            # V1.5.2: skip globally-unsubscribed addresses
+            if is_unsubscribed(session, lead_data["email"]):
+                skipped_unsubscribed += 1
+                continue
+
             # Check if lead already exists
             existing = session.query(Lead).filter_by(
                 email=lead_data['email'],
@@ -98,7 +105,8 @@ def import_leads(file_path: str, campaign_name: str):
                 campaign_id=campaign.id,
                 **lead_data,
                 source_row_json=str(row_dict),  # Store original data
-                status=LeadStatus.new.value
+                status=LeadStatus.new.value,
+                intake_source="apollo_csv",
             )
             session.add(lead)
             session.flush()  # populate lead.id before logging the event
@@ -112,7 +120,10 @@ def import_leads(file_path: str, campaign_name: str):
             })
 
         session.commit()
-        print(f"Imported {imported_count} new leads into campaign '{campaign_name}'")
+        msg = f"Imported {imported_count} new leads into campaign '{campaign_name}'"
+        if skipped_unsubscribed:
+            msg += f" (skipped {skipped_unsubscribed} unsubscribed)"
+        print(msg)
 
 def main():
     parser = argparse.ArgumentParser(description="Import Apollo contacts export")

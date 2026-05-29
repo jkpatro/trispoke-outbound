@@ -38,6 +38,10 @@ start "trispoke Apollo push" cmd /k "uv run python -m trispoke.sender.apollo_pus
 REM Legacy SMTP sender loop (only needed for SMTP-direct campaigns) — uncomment if used:
 REM start "trispoke sender" cmd /k "uv run python -m trispoke.sender.sender_loop"
 
+REM --- 3b. Pipeline runner (V1.5.2) -------------------------------------------
+echo Starting pipeline runner (auto enrich/pain/generate/QC for new leads)...
+start "trispoke pipeline" cmd /k "uv run python -m trispoke.scheduler.pipeline_runner"
+
 REM --- 4. Streamlit UI --------------------------------------------------------
 echo Starting Streamlit UI on http://localhost:8501 ...
 start "trispoke UI" cmd /k "uv run streamlit run src/trispoke/ui/app.py --server.port 8501"

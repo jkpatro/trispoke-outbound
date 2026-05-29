@@ -47,6 +47,10 @@ new_window "Apollo push" "uv run python -m trispoke.sender.apollo_push_worker"
 # Legacy SMTP sender loop (only for SMTP-direct campaigns):
 # new_window "Sender" "uv run python -m trispoke.sender.sender_loop"
 
+# --- 3b. Pipeline runner (V1.5.2) --------------------------------------------
+echo "Starting pipeline runner (auto enrich/pain/generate/QC for new leads)..."
+new_window "Pipeline" "uv run python -m trispoke.scheduler.pipeline_runner"
+
 # --- 4. Streamlit UI ----------------------------------------------------------
 echo "Starting Streamlit UI on http://localhost:8501 ..."
 new_window "UI" "uv run streamlit run src/trispoke/ui/app.py --server.port 8501"

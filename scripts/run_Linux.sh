@@ -72,6 +72,9 @@ start_window "Apollo events" "uv run python -m trispoke.receiver.apollo_events_p
 start_window "Apollo push" "uv run python -m trispoke.sender.apollo_push_worker"
 # Legacy: start_window "Sender" "uv run python -m trispoke.sender.sender_loop"
 
+# --- 3b. Pipeline runner (V1.5.2) --------------------------------------------
+start_window "Pipeline" "uv run python -m trispoke.scheduler.pipeline_runner"
+
 # --- 4. Streamlit UI ----------------------------------------------------------
 start_window "UI" "uv run streamlit run src/trispoke/ui/app.py --server.port 8501"
 
