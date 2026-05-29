@@ -63,10 +63,9 @@ def render() -> None:
     needs_anthropic = mode in ("claude_only", "hybrid", "hybrid_smart")
     needs_abacus = mode in ("abacus_only", "hybrid_smart")
 
-    if needs_anthropic:
-        _render_byok_section()
-    if needs_abacus:
-        _render_abacus_byok_section()
+    _render_credential_status(
+        needs_anthropic=needs_anthropic, needs_abacus=needs_abacus
+    )
 
     _render_model_selectors(mode)
 
@@ -480,6 +479,43 @@ def _mode_card(
             ):
                 st.session_state["gen_mode"] = value
                 st.rerun()
+
+
+def _render_credential_status(*, needs_anthropic: bool, needs_abacus: bool) -> None:
+    """Compact strip showing whether the credentials this mode needs are
+    configured. Replaces the per-campaign BYOK pasting workflow — keys live
+    on the global Settings page now.
+    """
+    settings = get_settings()
+    items: list[str] = []
+    if needs_anthropic:
+        ok = bool(settings.anthropic_api_key)
+        items.append(
+            f"<span style='color:{'#065f46' if ok else '#991b1b'};font-weight:600'>"
+            f"{'✓' if ok else '✗'} Anthropic</span>"
+        )
+    if needs_abacus:
+        ok = bool(settings.abacus_api_key)
+        items.append(
+            f"<span style='color:{'#065f46' if ok else '#991b1b'};font-weight:600'>"
+            f"{'✓' if ok else '✗'} Abacus</span>"
+        )
+    if not items:
+        return
+
+    missing = (
+        (needs_anthropic and not settings.anthropic_api_key)
+        or (needs_abacus and not settings.abacus_api_key)
+    )
+    sep = " &nbsp;·&nbsp; "
+    st.markdown(
+        f"<div style='padding:8px 12px;border:0.5px solid #d1d5db;"
+        f"border-radius:8px;background:#f8fafc;color:#0f172a'>"
+        f"<strong>Credentials</strong> &nbsp; {sep.join(items)}"
+        f"{'  &nbsp;—&nbsp; <em>Configure missing keys in <strong>⚙ Settings</strong></em>' if missing else ''}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_byok_section() -> None:

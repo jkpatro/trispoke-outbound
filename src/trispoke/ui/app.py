@@ -32,6 +32,7 @@ _NAV = [
     ("campaigns", "Campaigns"),
     ("review", "Review queue"),
     ("insights", "Insights"),
+    ("settings", "⚙ Settings"),
 ]
 
 
@@ -113,6 +114,9 @@ def render_main() -> None:
     elif page == "dashboard":
         from trispoke.ui.pages.dashboard import render as _dash_render
         _dash_render()
+    elif page == "settings":
+        from trispoke.ui.pages.settings import render as _settings_render
+        _settings_render()
     elif page == "insights":
         st.title("Insights")
         st.caption("Reply rates and classification breakdown — coming soon.")

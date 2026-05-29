@@ -111,3 +111,49 @@ def persist_abacus_byok_to_env(
 ) -> tuple[bool, str]:
     """Encrypt the Abacus BYOK key and persist as ABACUS_API_KEY_ENC."""
     return _persist_encrypted(plaintext, "ABACUS_API_KEY_ENC", env_path)
+
+
+def persist_plaintext_to_env(
+    var_name: str, value: str, env_path: str = ".env"
+) -> tuple[bool, str]:
+    """Write `VAR_NAME=value` to .env in plaintext. Used by the Settings page.
+
+    `.env` is already gitignored, so plaintext credentials there are no
+    worse than what's already on the machine. Returns (ok, message).
+    """
+    if not var_name or not var_name.strip():
+        return False, "Missing variable name."
+    var_name = var_name.strip().upper()
+
+    env_file = Path(env_path)
+    lines: list[str] = []
+    found = False
+    if env_file.exists():
+        for raw in env_file.read_text(encoding="utf-8").splitlines(keepends=True):
+            # Match exactly "VAR=…" at the start of the line (ignoring inline comments)
+            stripped = raw.lstrip()
+            if stripped.startswith(f"{var_name}="):
+                lines.append(f"{var_name}={value}\n")
+                found = True
+            else:
+                lines.append(raw)
+    if not found:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines.append(f"{var_name}={value}\n")
+
+    try:
+        env_file.write_text("".join(lines), encoding="utf-8")
+    except Exception as e:
+        return False, f"Failed to write {env_path}: {e}"
+
+    # Reflect immediately in the process environment AND clear settings cache
+    # so the next get_settings() call re-reads the file.
+    os.environ[var_name] = value
+    try:
+        from trispoke.config import get_settings
+        get_settings.cache_clear()
+    except Exception:
+        pass
+
+    return True, f"Saved to {env_path} as {var_name}."
