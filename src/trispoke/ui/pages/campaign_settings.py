@@ -74,6 +74,9 @@ def render() -> None:
     sending_mode, smtp_ack = _render_sending_mode_section()
 
     st.divider()
+    auto_approve_mode, warmup_threshold = _render_auto_approval_section()
+
+    st.divider()
     daily_cap, pace_seconds = _render_sending_section()
 
     st.divider()
@@ -82,6 +85,8 @@ def render() -> None:
         mode=mode,
         sending_mode=sending_mode,
         smtp_ack=smtp_ack,
+        auto_approve_mode=auto_approve_mode,
+        warmup_threshold=warmup_threshold,
         daily_cap=daily_cap,
         pace_seconds=pace_seconds,
     )
@@ -565,6 +570,72 @@ def _render_model_selectors(mode: str) -> None:
             )
 
 
+def _render_auto_approval_section() -> tuple[str, int]:
+    """Auto-approval policy: how aggressively to ship without human review.
+
+    Defaults read from the currently-selected campaign in session_state if
+    available so settings round-trip per campaign.
+    """
+    st.subheader("Auto-approval")
+
+    # Load campaign defaults
+    campaign_name = get_campaign()
+    current_mode = "after_warmup"
+    current_threshold = 20
+    if campaign_name:
+        with get_session() as _session:
+            existing = (
+                _session.query(Campaign).filter_by(name=campaign_name).first()
+            )
+            if existing:
+                current_mode = existing.auto_approve_mode or "after_warmup"
+                current_threshold = int(existing.warmup_threshold or 20)
+
+    label_map = {
+        "Never (always human review)": "never",
+        "After warmup (recommended)": "after_warmup",
+        "Always (full auto)": "always",
+    }
+    label_inv = {v: k for k, v in label_map.items()}
+
+    options = list(label_map.keys())
+    idx = options.index(label_inv.get(current_mode, options[1]))
+    chosen_label = st.radio(
+        "Auto-approval policy",
+        options,
+        index=idx,
+        key="auto_approve_radio",
+        label_visibility="collapsed",
+        help=(
+            "Never: every QC-passed draft waits for human approval.\n\n"
+            "After warmup: once `warmup_threshold` sends have completed, "
+            "QC-passed drafts auto-approve and ship via Apollo's schedule.\n\n"
+            "Always: QC-passed drafts auto-approve immediately. Use only "
+            "after you trust your QC + LLM prompts."
+        ),
+    )
+    chosen = label_map[chosen_label]
+
+    threshold = current_threshold
+    if chosen == "after_warmup":
+        threshold = st.number_input(
+            "Warmup threshold (successful sends before auto-approval kicks in)",
+            value=current_threshold,
+            min_value=0,
+            step=5,
+            key="auto_approve_threshold",
+        )
+
+    if chosen == "always":
+        st.warning(
+            "⚠ Full-auto mode bypasses the human review queue entirely. "
+            "QC-flagged drafts still get held; QC-passed drafts ship "
+            "immediately on the next push cycle."
+        )
+
+    return chosen, int(threshold)
+
+
 def _render_sending_mode_section() -> tuple[str, bool]:
     """V1.5: pick Apollo (recommended) or SMTP-direct (legacy, friction-gated).
 
@@ -654,6 +725,8 @@ def _render_actions(
     mode: str,
     sending_mode: str = "apollo",
     smtp_ack: bool = False,
+    auto_approve_mode: str = "after_warmup",
+    warmup_threshold: int = 20,
     daily_cap: int,
     pace_seconds: int,
 ) -> None:
@@ -678,7 +751,11 @@ def _render_actions(
             st.error("Campaign name required.")
             return
         try:
-            _save_campaign(name=name.strip(), mode=mode, sending_mode=sending_mode)
+            _save_campaign(
+                name=name.strip(), mode=mode, sending_mode=sending_mode,
+                auto_approve_mode=auto_approve_mode,
+                warmup_threshold=warmup_threshold,
+            )
             set_campaign(name.strip())
             st.success(f"Saved campaign '{name}' as draft.")
         except Exception as e:
@@ -700,7 +777,11 @@ def _render_actions(
         ):
             st.error("Upload an Apollo file first.")
             return
-        _save_and_generate(name=name.strip(), mode=mode, sending_mode=sending_mode)
+        _save_and_generate(
+            name=name.strip(), mode=mode, sending_mode=sending_mode,
+            auto_approve_mode=auto_approve_mode,
+            warmup_threshold=warmup_threshold,
+        )
 
 
 # ---------- helpers ----------
@@ -755,7 +836,11 @@ def _list_ollama_models() -> list[str]:
         return []
 
 
-def _save_campaign(*, name: str, mode: str, sending_mode: str = "apollo") -> int:
+def _save_campaign(
+    *, name: str, mode: str, sending_mode: str = "apollo",
+    auto_approve_mode: str = "after_warmup",
+    warmup_threshold: int = 20,
+) -> int:
     """Upsert campaign and append leads from the uploaded DataFrame, if any.
 
     `sending_mode` ('apollo' | 'smtp_direct') is stashed in settings_json so
@@ -768,12 +853,16 @@ def _save_campaign(*, name: str, mode: str, sending_mode: str = "apollo") -> int
         if campaign is None:
             initial_settings = {"sending_mode": sending_mode}
             campaign = Campaign(
-                name=name, mode=mode, settings_json=json.dumps(initial_settings)
+                name=name, mode=mode, settings_json=json.dumps(initial_settings),
+                auto_approve_mode=auto_approve_mode,
+                warmup_threshold=warmup_threshold,
             )
             session.add(campaign)
             session.commit()
         else:
             campaign.mode = mode
+            campaign.auto_approve_mode = auto_approve_mode
+            campaign.warmup_threshold = warmup_threshold
             try:
                 existing = json.loads(campaign.settings_json or "{}")
             except (TypeError, ValueError):
@@ -844,7 +933,11 @@ def _str_or_none(row: pd.Series, candidates: tuple[str, ...]) -> Optional[str]:
     return None
 
 
-def _save_and_generate(*, name: str, mode: str, sending_mode: str = "apollo") -> None:
+def _save_and_generate(
+    *, name: str, mode: str, sending_mode: str = "apollo",
+    auto_approve_mode: str = "after_warmup",
+    warmup_threshold: int = 20,
+) -> None:
     """Save campaign, then run enrich + generate inline inside `st.status`.
 
     Per agreed default: synchronous (no worker thread) with phase updates.
@@ -855,7 +948,11 @@ def _save_and_generate(*, name: str, mode: str, sending_mode: str = "apollo") ->
     with st.status("Saving campaign…", expanded=True) as status:
         st.write("Persisting campaign and leads…")
         try:
-            _save_campaign(name=name, mode=mode, sending_mode=sending_mode)
+            _save_campaign(
+                name=name, mode=mode, sending_mode=sending_mode,
+                auto_approve_mode=auto_approve_mode,
+                warmup_threshold=warmup_threshold,
+            )
         except Exception as e:
             status.update(label=f"Save failed: {e}", state="error")
             return

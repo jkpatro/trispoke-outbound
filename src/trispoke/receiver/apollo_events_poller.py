@@ -35,6 +35,7 @@ from trispoke.db.models import (
     SendStatus,
 )
 from trispoke.db.session import get_session
+from trispoke.notifier import notify_positive_reply
 from trispoke.receiver.classifier import classify
 
 
@@ -201,6 +202,21 @@ class ApolloEventsPoller:
                     "slot_name": slot.slot_name,
                     "classification": classification,
                 })
+                # Fire the webhook for positive replies (Slack / Zapier / etc).
+                if classification == "positive":
+                    from trispoke.db.models import Campaign as _C
+                    campaign = session.get(_C, email.campaign_id)
+                    notify_positive_reply(
+                        self.settings.reply_webhook_url,
+                        campaign=campaign.name if campaign else "(unknown)",
+                        lead_email=lead.email,
+                        lead_name=(
+                            f"{lead.first_name or ''} {lead.last_name or ''}"
+                        ).strip(),
+                        reply_subject=subject,
+                        reply_excerpt=body_text,
+                        apollo_message_id=message_id,
+                    )
                 events_applied.append("replied")
 
         if ev.get("opened_at"):

@@ -111,8 +111,8 @@ def render_main() -> None:
 
         render()
     elif page == "dashboard":
-        st.title("Dashboard")
-        st.caption("Pipeline metrics and sends-today — coming next.")
+        from trispoke.ui.pages.dashboard import render as _dash_render
+        _dash_render()
     elif page == "insights":
         st.title("Insights")
         st.caption("Reply rates and classification breakdown — coming soon.")

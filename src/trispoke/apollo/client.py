@@ -162,33 +162,33 @@ class ApolloClient:
         return body.get("email_accounts") or body.get("mailboxes") or []
 
     def create_sequence(
-        self, name: str, step_template: Dict[str, Any]
+        self, name: str, step_template: Dict[str, Any],
+        follow_up_template: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Create a fully-wired Apollo sequence.
+        """Create a fully-wired Apollo sequence with optional follow-up step.
 
-        Apollo's actual data model is `sequence → step → touch → template`,
-        and a sequence won't fire until:
-          1. the step's auto-created touch has a populated template,
-          2. the touch is explicitly approved (status=`to_be_reviewed` →
-             approved via POST /emailer_touches/{id}/approve), and
-          3. an emailer_schedule_id is attached to the sequence.
+        Apollo data model: `sequence → step → touch → template`. A sequence
+        won't fire until each touch has a populated template, every touch is
+        approved, and a schedule is attached. This method does all of that.
 
-        This method does all of that in one shot. It does NOT activate the
-        sequence (Apollo silently ignores `active: true` on PUT for this API
-        tier — activation must be done manually in the Apollo UI, one time).
+        It does NOT activate the sequence (Apollo silently ignores
+        `active: true` on PUT for this API tier — activation must be done
+        manually in the Apollo UI, one time).
 
-        `step_template` provides: subject, body_html, body_text,
-        wait_days_after, mailbox_id, schedule_id (optional — falls back to
-        the workspace default).
+        `step_template` provides initial step: subject, body_html, body_text,
+        wait_days_after, mailbox_id, schedule_id.
+
+        `follow_up_template` (optional) provides a second step: subject,
+        body_html, body_text, wait_days_after (default 4).
 
         Returns:
           {
-            "sequence_id":  str,
-            "step_id":      str,
-            "touch_id":     str,
-            "template_id":  str,
-            "schedule_id":  str,
-            "mailbox_id":   str | None,
+            "sequence_id":  str, "step_id": str, "touch_id": str,
+            "template_id":  str, "schedule_id": str, "mailbox_id": str | None,
+            # follow_up_* keys present only when follow_up_template was provided
+            "followup_step_id":     str | None,
+            "followup_touch_id":    str | None,
+            "followup_template_id": str | None,
           }
         """
         # 1. sequence shell
@@ -252,14 +252,54 @@ class ApolloClient:
                 json=update_body,
             )
 
-        return {
+        out: Dict[str, Any] = {
             "sequence_id": sequence_id,
             "step_id": step_id,
             "touch_id": touch_id,
             "template_id": template_id,
             "schedule_id": schedule_id,
             "mailbox_id": step_template.get("mailbox_id"),
+            "followup_step_id": None,
+            "followup_touch_id": None,
+            "followup_template_id": None,
         }
+
+        # 7. (optional) Add a follow-up step.
+        if follow_up_template:
+            fu_step_payload = {
+                "emailer_campaign_id": sequence_id,
+                "position": 2,
+                "type": "auto_email",
+                "wait_time": int(follow_up_template.get("wait_days_after", 4)),
+                "wait_mode": "day",
+            }
+            fu_step_resp = self._retry_request(
+                "POST", f"{self.base_url}/emailer_steps", json=fu_step_payload
+            )
+            fu_step = fu_step_resp.json().get("emailer_step") or fu_step_resp.json()
+            fu_step_id = fu_step.get("id")
+            if not fu_step_id:
+                raise RuntimeError(
+                    f"Apollo did not return a follow-up step id: {fu_step_resp.json()!r}"
+                )
+
+            fu_touch_id, fu_template_id = self._find_touch_and_template_for_step(
+                sequence_id, fu_step_id
+            )
+            self.update_template(
+                fu_template_id,
+                subject=follow_up_template.get("subject", ""),
+                body_html=follow_up_template.get("body_html", ""),
+                body_text=follow_up_template.get("body_text", ""),
+            )
+            self._retry_request(
+                "POST", f"{self.base_url}/emailer_touches/{fu_touch_id}/approve"
+            )
+            out["followup_step_id"] = fu_step_id
+            out["followup_touch_id"] = fu_touch_id
+            out["followup_template_id"] = fu_template_id
+
+        return out
 
     def update_template(
         self,

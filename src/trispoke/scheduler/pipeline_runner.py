@@ -23,6 +23,7 @@ from typing import Optional
 
 from trispoke.apollo.client import ApolloClient
 from trispoke.config import get_settings
+from trispoke.db.auto_approval import should_auto_approve
 from trispoke.db.event_log import log_event
 from trispoke.db.models import (
     Campaign,
@@ -56,7 +57,7 @@ class PipelineRunner:
     def run_once(self) -> dict[str, int]:
         """One pass through all status='new' leads. Returns counts by phase."""
         counts = {"enriched": 0, "generated": 0, "qc_flagged": 0, "qc_passed": 0,
-                  "skipped": 0, "errored": 0}
+                  "auto_approved": 0, "skipped": 0, "errored": 0}
 
         with get_session() as session:
             new_leads = (
@@ -244,18 +245,42 @@ class PipelineRunner:
             lead.status = LeadStatus.qc_flagged.value
             event_type = "qc_flagged"
             counts["qc_flagged"] += 1
-        else:
-            lead.status = LeadStatus.drafted.value
-            event_type = "qc_passed"
-            counts["qc_passed"] += 1
-        session.commit()
-        log_event(session, lead.id, event_type, {
+            session.commit()
+            log_event(session, lead.id, event_type, {
+                "email_id": email.id,
+                "model_used": result.model_used,
+                "elapsed_seconds": result.elapsed_seconds,
+                "flags": json.loads(email.qc_flags_json or "[]"),
+                "campaign": campaign.name,
+            })
+            return True
+
+        # QC passed — decide whether to auto-approve or leave for human review.
+        lead.status = LeadStatus.drafted.value
+        counts["qc_passed"] += 1
+        log_event(session, lead.id, "qc_passed", {
             "email_id": email.id,
             "model_used": result.model_used,
             "elapsed_seconds": result.elapsed_seconds,
             "flags": json.loads(email.qc_flags_json or "[]"),
             "campaign": campaign.name,
         })
+
+        if should_auto_approve(session, campaign):
+            email.send_mode = "scheduled"  # auto-approved drafts use slot schedule
+            lead.status = LeadStatus.approved.value
+            counts["auto_approved"] = counts.get("auto_approved", 0) + 1
+            session.commit()
+            log_event(session, lead.id, "email_approved", {
+                "email_id": email.id,
+                "auto_approved": True,
+                "auto_approve_mode": campaign.auto_approve_mode,
+                "send_mode": "scheduled",
+                "campaign": campaign.name,
+            })
+        else:
+            session.commit()
+
         return True
 
 

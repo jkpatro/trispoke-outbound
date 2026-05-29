@@ -98,6 +98,12 @@ class Campaign(Base):
     created_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now())
     started_at: Mapped[DateTime | None] = mapped_column(DateTime, nullable=True)
     settings_json: Mapped[str] = mapped_column(Text)
+    # Full-automation controls.
+    # auto_approve_mode: 'never' (always human review)
+    #                    'after_warmup' (auto-approve once warmup_threshold sends complete)
+    #                    'always' (auto-approve every QC-passed lead immediately)
+    auto_approve_mode: Mapped[str] = mapped_column(String, default="after_warmup")
+    warmup_threshold: Mapped[int] = mapped_column(Integer, default=20)
 
 
 class Lead(Base):
@@ -205,12 +211,13 @@ class Event(Base):
 
 
 class ApolloSlot(Base):
-    """V1.5.1 — one row per pre-activated Apollo sequence in the slot pool.
+    """One row per pre-activated Apollo sequence in the slot pool.
 
-    Each slot is a sequence whose template content is rewritten just before
-    each send. Recycling is gated on `last_message_status` because Apollo
-    reads templates LIVE at send time, so a slot can only be reassigned
-    when its currently-bound message is fully terminal (completed/failed).
+    Each slot is a 2-step sequence (initial + follow-up). Templates are
+    rewritten just before each send. Recycling is gated on
+    `last_message_status` because Apollo reads templates LIVE at send time,
+    so a slot can only be reassigned when its currently-bound message is
+    fully terminal (completed/failed).
     """
 
     __tablename__ = "apollo_slots"
@@ -221,6 +228,10 @@ class ApolloSlot(Base):
     step_id: Mapped[str] = mapped_column(String)
     touch_id: Mapped[str] = mapped_column(String)
     template_id: Mapped[str] = mapped_column(String)
+    # Optional 4-day follow-up step + its own touch + template
+    followup_step_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    followup_touch_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    followup_template_id: Mapped[str | None] = mapped_column(String, nullable=True)
     mailbox_id: Mapped[str | None] = mapped_column(String, nullable=True)
     schedule_id: Mapped[str | None] = mapped_column(String, nullable=True)
     # 'free' | 'in_use' | 'disabled'

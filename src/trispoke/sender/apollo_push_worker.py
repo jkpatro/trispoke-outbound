@@ -40,6 +40,8 @@ from trispoke.db.models import (
     Email,
     Lead,
     LeadStatus,
+    Send,
+    SendStatus,
 )
 from trispoke.db.session import get_session
 
@@ -122,11 +124,40 @@ class ApolloPushWorker:
         session.commit()
         return slot
 
+    # ---------- bounce-rate guard ----------
+
+    def _check_bounce_rate(self, session) -> bool:
+        """Return False (push paused) if recent bounce rate exceeds threshold."""
+        threshold = float(self.settings.bounce_pause_threshold)
+        min_sends = int(self.settings.bounce_pause_min_sends)
+        if threshold <= 0:
+            return True
+        recent = (
+            session.query(Send.status)
+            .order_by(Send.created_at.desc())
+            .limit(100)
+            .all()
+        )
+        if len(recent) < min_sends:
+            return True
+        bounces = sum(1 for (s,) in recent if s == SendStatus.bounced.value)
+        rate = bounces / len(recent) if recent else 0.0
+        if rate > threshold:
+            print(
+                f"[push] PAUSED — bounce rate {rate:.1%} (>{threshold:.1%}) "
+                f"over last {len(recent)} sends. Will retry next cycle."
+            )
+            return False
+        return True
+
     # ---------- main loop ----------
 
     def run_once(self) -> int:
         pushed = 0
         with get_session() as session:
+            if not self._check_bounce_rate(session):
+                return 0
+
             approved = (
                 session.query(Email)
                 .join(Lead, Email.lead_id == Lead.id)
@@ -198,13 +229,33 @@ class ApolloPushWorker:
                 "contact_id": lead.apollo_contact_id, "email": lead.email,
             })
 
-        # 2. PUT the AI subject + body into the slot's template
+        # 2. PUT the AI subject + body into the slot's initial template
         self.apollo.update_template(
             slot.template_id,
             subject=email.subject or "",
             body_html=_plain_to_html(email.body or ""),
             body_text=email.body or "",
         )
+
+        # 2b. If the slot has a follow-up step, ensure it's personalised too.
+        # Generic "floating this up" content using the lead's first name —
+        # we replace Apollo merge variables manually since this is a one-shot
+        # per-lead PUT rather than a bulk template fill.
+        if slot.followup_template_id:
+            first = (lead.first_name or "there").strip().split()[0]
+            fu_subject = f"re: {email.subject or 'quick follow-up'}"
+            fu_text = (
+                f"Hi {first},\n\nFloating this up — was the previous note "
+                "relevant to anything you're looking at right now? Happy to "
+                "take it off your plate either way.\n\nBest,"
+            )
+            fu_html = _plain_to_html(fu_text)
+            self.apollo.update_template(
+                slot.followup_template_id,
+                subject=fu_subject,
+                body_html=fu_html,
+                body_text=fu_text,
+            )
 
         # 3. Enroll into the slot's sequence
         self.apollo.enroll_contact_in_sequence(

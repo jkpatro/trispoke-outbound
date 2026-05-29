@@ -44,6 +44,22 @@ PLACEHOLDER_BODY_TEXT = (
     "If you're reading this, something went wrong."
 )
 
+# The follow-up step uses the SAME template content across all sends because
+# it's a short, generic "floating this up" bump — no per-lead personalization
+# needed. Each slot still gets its own copy for race-free template overwrites.
+FOLLOW_UP_SUBJECT = "re: floating this up"
+FOLLOW_UP_BODY_HTML = (
+    "<p>Hi {{first_name}},</p>"
+    "<p>Floating this up — was the previous note relevant to anything you're "
+    "looking at right now? Happy to take it off your plate either way.</p>"
+    "<p>Best,</p>"
+)
+FOLLOW_UP_BODY_TEXT = (
+    "Hi {{first_name}},\n\n"
+    "Floating this up — was the previous note relevant to anything you're "
+    "looking at right now? Happy to take it off your plate either way.\n\nBest,"
+)
+
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
@@ -60,6 +76,10 @@ def main() -> int:
                    help="sleep between Apollo calls to respect rate limits")
     p.add_argument("--prefix", type=str, default="trispoke-slot",
                    help="slot name prefix (default 'trispoke-slot')")
+    p.add_argument("--no-followup", action="store_true",
+                   help="skip the 2nd (follow-up) step in each slot")
+    p.add_argument("--followup-wait-days", type=int, default=4,
+                   help="days to wait before the follow-up step fires (default 4)")
     args = p.parse_args()
 
     apollo = ApolloClient()
@@ -110,6 +130,14 @@ def main() -> int:
                 continue
 
         try:
+            follow_up = None
+            if not args.no_followup:
+                follow_up = {
+                    "subject": FOLLOW_UP_SUBJECT,
+                    "body_html": FOLLOW_UP_BODY_HTML,
+                    "body_text": FOLLOW_UP_BODY_TEXT,
+                    "wait_days_after": args.followup_wait_days,
+                }
             out = apollo.create_sequence(
                 name=slot_name,
                 step_template={
@@ -120,6 +148,7 @@ def main() -> int:
                     "mailbox_id": mailbox_id,
                     "schedule_id": schedule_id,
                 },
+                follow_up_template=follow_up,
             )
         except Exception as e:
             failed += 1
@@ -134,6 +163,9 @@ def main() -> int:
                 step_id=out["step_id"],
                 touch_id=out["touch_id"],
                 template_id=out["template_id"],
+                followup_step_id=out.get("followup_step_id"),
+                followup_touch_id=out.get("followup_touch_id"),
+                followup_template_id=out.get("followup_template_id"),
                 mailbox_id=mailbox_id,
                 schedule_id=schedule_id,
                 status="free",
@@ -142,9 +174,10 @@ def main() -> int:
             session.commit()
 
         created += 1
+        fu_note = " +followup" if out.get("followup_step_id") else ""
         print(
             f"  [{slot_name}] OK seq={out['sequence_id']} "
-            f"step={out['step_id']} template={out['template_id']}"
+            f"step={out['step_id']} template={out['template_id']}{fu_note}"
         )
         time.sleep(args.pace_seconds)
 

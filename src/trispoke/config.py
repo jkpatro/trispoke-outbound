@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     apollo_poll_interval_seconds: int = 900
     apollo_max_enrollments_per_minute: int = 25
     apollo_default_sequence_mailbox_ids: list[str] = []
+    # Full-automation controls
+    bounce_pause_threshold: float = 0.03  # pause when bounce rate over last 100 sends > 3%
+    bounce_pause_min_sends: int = 20  # need at least this many recent sends to evaluate
+    reply_webhook_url: str | None = None  # POSTed JSON on positive replies (Slack/Zapier/etc)
     anthropic_api_key: str | None = None
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "qwen3:8b"

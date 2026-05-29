@@ -181,4 +181,5 @@ def test_pipeline_no_new_leads_returns_zeros(memdb, monkeypatch):
     from trispoke.scheduler.pipeline_runner import PipelineRunner
     counts = PipelineRunner().run_once()
     assert counts == {"enriched": 0, "generated": 0, "qc_flagged": 0,
-                      "qc_passed": 0, "skipped": 0, "errored": 0}
+                      "qc_passed": 0, "auto_approved": 0,
+                      "skipped": 0, "errored": 0}
