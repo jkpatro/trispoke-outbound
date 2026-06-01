@@ -2,14 +2,16 @@ import anthropic
 import time
 from typing import Tuple, Optional
 from trispoke.config import get_settings
+from trispoke.secrets_store import secret
 
 settings = get_settings()
 
 class ClaudeClient:
     def __init__(self):
-        if not settings.anthropic_api_key:
+        key = secret("ANTHROPIC_API_KEY", settings.anthropic_api_key)
+        if not key:
             raise Exception("ANTHROPIC_API_KEY is not set")
-        self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        self.client = anthropic.Anthropic(api_key=key)
 
     def generate(
         self,

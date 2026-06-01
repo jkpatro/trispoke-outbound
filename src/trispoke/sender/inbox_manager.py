@@ -56,16 +56,17 @@ def _parse_inboxes_config() -> List[InboxConfig]:
         i += 1
 
     if not inboxes:
+        from trispoke.secrets_store import secret as _secret
         inboxes.append(InboxConfig(
             address=settings.smtp_username,
             smtp_host=settings.smtp_host,
             smtp_port=settings.smtp_port,
             smtp_username=settings.smtp_username,
-            smtp_password=settings.smtp_password,
+            smtp_password=_secret("SMTP_PASSWORD", settings.smtp_password),
             imap_host=settings.imap_host,
             imap_port=settings.imap_port,
             imap_username=settings.imap_username,
-            imap_password=settings.imap_password,
+            imap_password=_secret("IMAP_PASSWORD", settings.imap_password),
         ))
 
     return inboxes

@@ -3,6 +3,11 @@ import streamlit as st
 
 _CSS = """
 <style>
+/* Hide Streamlit's auto-discovered multipage nav (the `pages/` folder is just
+   our internal module layout, not a multipage app). Our custom sidebar
+   replaces it. */
+[data-testid="stSidebarNav"] { display: none !important; }
+
 /* Scoped only to our `ts-*` classes — never touch Streamlit's own selectors
    (those vary across versions and break dark-mode / mobile layouts).  */
 .ts-card {
@@ -170,9 +175,55 @@ _CSS = """
 """
 
 
+# Responsive layer. Everything here is inside @media (max-width: …) so desktop
+# layout is untouched; on phones/tablets it tightens padding, scales headings,
+# and stacks side-by-side columns into a single touch-friendly column.
+_RESPONSIVE_CSS = """
+<style>
+@media (max-width: 768px) {
+  .block-container {
+      padding-left: 0.9rem !important;
+      padding-right: 0.9rem !important;
+      padding-top: 0.8rem !important;
+      max-width: 100% !important;
+  }
+  .block-container h1 { font-size: 1.5rem !important; line-height: 1.2 !important; }
+  .block-container h2 { font-size: 1.22rem !important; }
+  .block-container h3 { font-size: 1.06rem !important; }
+  /* Touch-friendly tap targets. */
+  .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button { min-height: 42px; }
+  /* Header bar: keep it within the viewport (match the tighter padding) and wrap. */
+  .ts-hb-anchor + div [data-testid="stHorizontalBlock"] {
+      margin-left: -0.9rem !important; margin-right: -0.9rem !important;
+      padding: 10px 12px !important; flex-wrap: wrap !important; row-gap: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Stack side-by-side columns into a full-width vertical flow. */
+  [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 0.5rem !important; }
+  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+      flex: 1 1 100% !important; width: 100% !important; min-width: 100% !important;
+  }
+  /* Exception: the campaign wizard stepper stays compact (~3 chips per row)
+     instead of becoming a tall full-width stack. */
+  [data-testid="stHorizontalBlock"]:has([class*="st-key-wizstep_"]) > [data-testid="stColumn"] {
+      flex: 1 1 30% !important; min-width: 30% !important; width: auto !important;
+  }
+  [class*="st-key-wizstep_"] button {
+      font-size: 11px !important; padding: 7px 3px !important; gap: 4px !important;
+  }
+  /* Don't let dataframes/editors force horizontal page scroll. */
+  [data-testid="stDataFrame"], [data-testid="stDataEditor"] { max-width: 100% !important; }
+}
+</style>
+"""
+
+
 def inject_styles() -> None:
     """Inject the trispoke palette and component styles."""
     st.markdown(_CSS, unsafe_allow_html=True)
+    st.markdown(_RESPONSIVE_CSS, unsafe_allow_html=True)
 
 
 def badge(text: str, kind: str = "recommended") -> str:

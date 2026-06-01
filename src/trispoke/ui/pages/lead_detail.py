@@ -13,6 +13,7 @@ from trispoke.db.models import (
     PainAnalysis,
 )
 from trispoke.db.session import get_session
+from trispoke.secrets_store import secret
 from trispoke.ui.components.email_card import (
     CardEdits,
     EnhanceRequest,
@@ -49,11 +50,11 @@ def _configured_engines() -> list[tuple[str, str, str]]:
     engines: list[tuple[str, str, str]] = [
         ("local_only", "Local (Ollama)", "free"),
     ]
-    if s.anthropic_api_key:
+    if secret("ANTHROPIC_API_KEY", s.anthropic_api_key):
         engines.append(
             ("claude_only", "Claude Sonnet", f"~${_estimate_claude_cost():.4f}")
         )
-    if s.abacus_api_key:
+    if secret("ABACUS_API_KEY", s.abacus_api_key):
         engines.append(("abacus_only", "Abacus RouteLLM", "subscription"))
     return engines
 

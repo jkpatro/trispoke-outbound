@@ -23,7 +23,6 @@ Rate-limited by APOLLO_MAX_ENROLLMENTS_PER_MINUTE (default 25).
 
 from __future__ import annotations
 
-import json
 import signal
 import sys
 import time
@@ -33,6 +32,7 @@ from typing import Optional
 from sqlalchemy import or_
 
 from trispoke.apollo.client import ApolloClient
+from trispoke.app_config import config_float, config_int
 from trispoke.config import get_settings
 from trispoke.db.event_log import log_event
 from trispoke.db.models import (
@@ -79,7 +79,10 @@ class ApolloPushWorker:
     # ---------- rate limiting ----------
 
     def _pace(self) -> None:
-        cap = max(1, self.settings.apollo_max_enrollments_per_minute)
+        cap = max(1, config_int(
+            "APOLLO_MAX_ENROLLMENTS_PER_MINUTE",
+            self.settings.apollo_max_enrollments_per_minute,
+        ))
         now = time.monotonic()
         self._enroll_log = [t for t in self._enroll_log if now - t < 60.0]
         if len(self._enroll_log) >= cap:
@@ -128,8 +131,12 @@ class ApolloPushWorker:
 
     def _check_bounce_rate(self, session) -> bool:
         """Return False (push paused) if recent bounce rate exceeds threshold."""
-        threshold = float(self.settings.bounce_pause_threshold)
-        min_sends = int(self.settings.bounce_pause_min_sends)
+        threshold = config_float(
+            "BOUNCE_PAUSE_THRESHOLD", self.settings.bounce_pause_threshold
+        )
+        min_sends = config_int(
+            "BOUNCE_PAUSE_MIN_SENDS", self.settings.bounce_pause_min_sends
+        )
         if threshold <= 0:
             return True
         recent = (

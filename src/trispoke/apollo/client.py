@@ -4,13 +4,19 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from trispoke.config import get_settings
+from trispoke.secrets_store import secret
 
 settings = get_settings()
 
 class ApolloClient:
     def __init__(self):
         self.base_url = "https://api.apollo.io/api/v1"
-        self.api_key = settings.apollo_api_key
+        self.api_key = secret("APOLLO_API_KEY", settings.apollo_api_key)
+        if not self.api_key:
+            raise Exception(
+                "Apollo API key is not configured. Set it in Settings (UI) "
+                "or APOLLO_API_KEY in .env."
+            )
         self.client = httpx.Client(
             headers={"x-api-key": self.api_key},
             timeout=30.0

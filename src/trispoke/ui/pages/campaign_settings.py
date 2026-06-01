@@ -15,19 +15,17 @@ import streamlit as st
 from trispoke.config import get_settings
 from trispoke.db.models import Campaign, Lead, LeadStatus
 from trispoke.db.session import get_session
+from trispoke.secrets_store import secret
 from trispoke.sender.inbox_manager import _parse_inboxes_config, today_sends_for_inbox
+from trispoke.app_config import config_int
+from trispoke.sender.ramp import get_daily_cap, get_ramp_schedule
 from trispoke.ui.utils.state import (
-    ABACUS_BYOK_KEY,
-    ABACUS_BYOK_VERIFIED_KEY,
     ABACUS_MODEL_KEY,
-    BYOK_KEY,
-    BYOK_VERIFIED_KEY,
     get_campaign,
-    persist_abacus_byok_to_env,
-    persist_byok_to_env,
     set_campaign,
     set_page,
 )
+from trispoke.ui.utils.styling import badge
 
 # Models Abacus.AI's RouteLLM exposes. Verbatim per the integration spec —
 # update this list if Abacus renames or adds models.
@@ -38,57 +36,234 @@ ABACUS_MODEL_OPTIONS = [
     "gpt-5-5",
     "gemini-3-1-pro",
 ]
-from trispoke.ui.utils.styling import badge
 
 
 _EMAIL_COL_CANDIDATES = ("email", "email address", "work_email", "work email")
 
 
+_WIZ_STEP_KEY = "campaign_wizard_step"
+_WIZ_STEPS = [
+    ("Basics & leads", "📝"),
+    ("Email generation", "✍️"),
+    ("Sending", "📤"),
+    ("Automation", "🤖"),
+    ("Review & launch", "🚀"),
+]
+
+_WIZ_CSS = """
+<style>
+  [class*="st-key-wizstep_"] button {
+      border-radius: 10px; font-size: 13px; font-weight: 600;
+      padding: 8px 6px; white-space: nowrap; box-shadow: none;
+  }
+  [class*="st-key-wizstep_"] button[kind="primary"],
+  [class*="st-key-wizstep_"] button[data-testid="stBaseButton-primary"] {
+      background: linear-gradient(135deg,#1f3a6e,#2b5fa0) !important;
+      border-color: transparent !important; color: #fff !important;
+  }
+</style>
+"""
+
+
 def render() -> None:
-    st.title("Campaign settings")
+    """Guided multi-step campaign builder. State lives in widget keys, so steps
+    can be revisited freely and the campaign can be saved as a draft at any point."""
+    editing = bool(get_campaign())
+    st.title("Edit campaign" if editing else "Create a campaign")
 
-    campaign_name = get_campaign() or ""
-    name = st.text_input(
+    step = int(st.session_state.get(_WIZ_STEP_KEY, 0))
+    step = max(0, min(step, len(_WIZ_STEPS) - 1))
+
+    _render_stepper(step)
+    st.progress((step + 1) / len(_WIZ_STEPS))
+    st.caption(f"Step {step + 1} of {len(_WIZ_STEPS)} — {_WIZ_STEPS[step][0]}")
+    st.divider()
+
+    (_wiz_basics, _wiz_generation, _wiz_sending, _wiz_automation, _wiz_review)[step]()
+
+    st.divider()
+    _wiz_nav(step)
+
+
+def _render_stepper(active: int) -> None:
+    st.markdown(_WIZ_CSS, unsafe_allow_html=True)
+    cols = st.columns(len(_WIZ_STEPS))
+    for i, (label, icon) in enumerate(_WIZ_STEPS):
+        marker = "✓" if i < active else icon
+        if cols[i].button(
+            f"{marker}  {label}",
+            key=f"wizstep_{i}",
+            use_container_width=True,
+            type="primary" if i == active else "secondary",
+        ):
+            st.session_state[_WIZ_STEP_KEY] = i
+            st.rerun()
+
+
+# ---------- wizard steps ----------
+
+
+def _wiz_basics() -> None:
+    st.text_input(
         "Campaign name",
-        value=campaign_name,
         placeholder="e.g. q2-staffing-toronto",
+        key="wiz_name",
+        help="A short, unique name. Save a draft any time and finish later.",
     )
-
     st.divider()
     _render_source_section()
 
-    st.divider()
-    mode = _render_generation_section()
 
+def _wiz_generation() -> None:
+    mode = _render_generation_section()
     needs_anthropic = mode in ("claude_only", "hybrid", "hybrid_smart")
     needs_abacus = mode in ("abacus_only", "hybrid_smart")
-
-    _render_credential_status(
-        needs_anthropic=needs_anthropic, needs_abacus=needs_abacus
-    )
-
+    _render_credential_status(needs_anthropic=needs_anthropic, needs_abacus=needs_abacus)
     _render_model_selectors(mode)
 
+
+def _wiz_sending() -> None:
+    _render_sending_mode_section()
     st.divider()
-    sending_mode, smtp_ack = _render_sending_mode_section()
+    _render_sending_section()
+
+
+def _wiz_automation() -> None:
+    _render_auto_approval_section()
+
+
+def _wiz_review() -> None:
+    v = _wiz_values()
+    st.subheader("Review")
+
+    gen_labels = {
+        "local_only": "Local only", "claude_only": "Claude only",
+        "abacus_only": "Abacus", "hybrid": "Hybrid (legacy)",
+        "hybrid_smart": "Smart Hybrid",
+    }
+    aa_labels = {
+        "never": "Never (human review)", "after_warmup": "After warmup",
+        "always": "Always (full auto)",
+    }
+    auto_txt = aa_labels.get(v["auto_approve_mode"], v["auto_approve_mode"])
+    if v["auto_approve_mode"] == "after_warmup":
+        auto_txt += f" · warmup {v['warmup_threshold']}"
+
+    rows = [
+        ("Campaign name", v["name"] or "— not set —"),
+        ("Email generation", gen_labels.get(v["mode"], v["mode"])),
+        ("Sending mode", "Apollo" if v["sending_mode"] == "apollo" else "Direct SMTP (legacy)"),
+        ("Auto-approval", auto_txt),
+    ]
+    for key_label, val in rows:
+        c1, c2 = st.columns([1, 2])
+        c1.markdown(f"**{key_label}**")
+        c2.write(val)
+
+    df = st.session_state.get("uploaded_df")
+    if df is not None:
+        st.caption(f"📎 {len(df)} rows queued from the uploaded file.")
 
     st.divider()
-    auto_approve_mode, warmup_threshold = _render_auto_approval_section()
+    if not v["name"]:
+        st.warning("Set a campaign name on **Basics & leads** before launching.")
+    if v["sending_mode"] == "smtp_direct" and not v["smtp_ack"]:
+        st.warning("Confirm the SMTP acknowledgement on the **Sending** step first.")
 
-    st.divider()
-    daily_cap, pace_seconds = _render_sending_section()
-
-    st.divider()
-    _render_actions(
-        name=name,
-        mode=mode,
-        sending_mode=sending_mode,
-        smtp_ack=smtp_ack,
-        auto_approve_mode=auto_approve_mode,
-        warmup_threshold=warmup_threshold,
-        daily_cap=daily_cap,
-        pace_seconds=pace_seconds,
+    blocked = (not v["name"]) or (
+        v["sending_mode"] == "smtp_direct" and not v["smtp_ack"]
     )
+    if st.button(
+        "🚀  Save & generate drafts",
+        type="primary",
+        use_container_width=True,
+        disabled=blocked,
+        key="wiz_launch",
+    ):
+        if (
+            st.session_state.get("source_type") == "Apollo CSV upload"
+            and st.session_state.get("uploaded_df") is None
+        ):
+            st.error("Upload an Apollo file on the first step before generating.")
+            return
+        _save_and_generate(
+            name=v["name"], mode=v["mode"], sending_mode=v["sending_mode"],
+            auto_approve_mode=v["auto_approve_mode"],
+            warmup_threshold=v["warmup_threshold"],
+        )
+
+
+# ---------- wizard helpers ----------
+
+
+def _wiz_values() -> dict:
+    """Derive the campaign config from the persisted widget keys, so saving works
+    no matter which step is currently on screen."""
+    name = (st.session_state.get("wiz_name") or get_campaign() or "").strip()
+    mode = st.session_state.get("gen_mode", "hybrid_smart")
+    sm = str(st.session_state.get("sending_mode_radio", "Send via Apollo"))
+    sending_mode = "apollo" if sm.startswith("Send via Apollo") else "smtp_direct"
+    aa_map = {
+        "Never (always human review)": "never",
+        "After warmup (recommended)": "after_warmup",
+        "Always (full auto)": "always",
+    }
+    auto_mode = aa_map.get(st.session_state.get("auto_approve_radio"), "after_warmup")
+    threshold = int(st.session_state.get("auto_approve_threshold", 20) or 20)
+    smtp_ack = bool(st.session_state.get("smtp_ack", False))
+    return {
+        "name": name, "mode": mode, "sending_mode": sending_mode,
+        "auto_approve_mode": auto_mode, "warmup_threshold": threshold,
+        "smtp_ack": smtp_ack,
+    }
+
+
+def _wiz_save_draft() -> None:
+    v = _wiz_values()
+    if not v["name"]:
+        st.error("Enter a campaign name on the first step first.")
+        return
+    try:
+        _save_campaign(
+            name=v["name"], mode=v["mode"], sending_mode=v["sending_mode"],
+            auto_approve_mode=v["auto_approve_mode"],
+            warmup_threshold=v["warmup_threshold"],
+        )
+        set_campaign(v["name"])
+        st.success(f"Draft saved — '{v['name']}'. You can continue any time.")
+    except Exception as e:
+        st.error(f"Save failed: {e}")
+
+
+def _wiz_validate(step: int) -> tuple[bool, str]:
+    v = _wiz_values()
+    if step == 0 and not v["name"]:
+        return False, "Enter a campaign name to continue."
+    if step == 2 and v["sending_mode"] == "smtp_direct" and not v["smtp_ack"]:
+        return False, "Tick the SMTP acknowledgement to continue."
+    return True, ""
+
+
+def _wiz_nav(step: int) -> None:
+    last = len(_WIZ_STEPS) - 1
+    back_col, draft_col, next_col = st.columns([1, 1, 1])
+    with back_col:
+        if step > 0 and st.button("←  Back", use_container_width=True, key="wiz_back"):
+            st.session_state[_WIZ_STEP_KEY] = step - 1
+            st.rerun()
+    with draft_col:
+        if st.button("💾  Save draft", use_container_width=True, key="wiz_draft"):
+            _wiz_save_draft()
+    with next_col:
+        if step < last and st.button(
+            "Next  →", type="primary", use_container_width=True, key="wiz_next"
+        ):
+            ok, msg = _wiz_validate(step)
+            if ok:
+                st.session_state[_WIZ_STEP_KEY] = step + 1
+                st.rerun()
+            else:
+                st.error(msg)
 
 
 # ---------- sections ----------
@@ -487,15 +662,17 @@ def _render_credential_status(*, needs_anthropic: bool, needs_abacus: bool) -> N
     on the global Settings page now.
     """
     settings = get_settings()
+    anthropic_key = secret("ANTHROPIC_API_KEY", settings.anthropic_api_key)
+    abacus_key = secret("ABACUS_API_KEY", settings.abacus_api_key)
     items: list[str] = []
     if needs_anthropic:
-        ok = bool(settings.anthropic_api_key)
+        ok = bool(anthropic_key)
         items.append(
             f"<span style='color:{'#065f46' if ok else '#991b1b'};font-weight:600'>"
             f"{'✓' if ok else '✗'} Anthropic</span>"
         )
     if needs_abacus:
-        ok = bool(settings.abacus_api_key)
+        ok = bool(abacus_key)
         items.append(
             f"<span style='color:{'#065f46' if ok else '#991b1b'};font-weight:600'>"
             f"{'✓' if ok else '✗'} Abacus</span>"
@@ -504,8 +681,8 @@ def _render_credential_status(*, needs_anthropic: bool, needs_abacus: bool) -> N
         return
 
     missing = (
-        (needs_anthropic and not settings.anthropic_api_key)
-        or (needs_abacus and not settings.abacus_api_key)
+        (needs_anthropic and not anthropic_key)
+        or (needs_abacus and not abacus_key)
     )
     sep = " &nbsp;·&nbsp; "
     st.markdown(
@@ -516,77 +693,6 @@ def _render_credential_status(*, needs_anthropic: bool, needs_abacus: bool) -> N
         f"</div>",
         unsafe_allow_html=True,
     )
-
-
-def _render_byok_section() -> None:
-    st.markdown("**BYOK — Anthropic API key**")
-    cols = st.columns([4, 1, 1])
-    with cols[0]:
-        new_key = st.text_input(
-            "Anthropic API key",
-            value=st.session_state.get(BYOK_KEY, ""),
-            type="password",
-            label_visibility="collapsed",
-            placeholder="sk-ant-...",
-        )
-        if new_key != st.session_state.get(BYOK_KEY, ""):
-            st.session_state[BYOK_KEY] = new_key
-            st.session_state[BYOK_VERIFIED_KEY] = False
-
-    with cols[1]:
-        if st.button("Verify", use_container_width=True):
-            ok, msg = _verify_anthropic_key(st.session_state.get(BYOK_KEY, ""))
-            st.session_state[BYOK_VERIFIED_KEY] = ok
-            if not ok:
-                st.error(msg or "Verification failed.")
-
-    with cols[2]:
-        if st.session_state.get(BYOK_VERIFIED_KEY):
-            st.markdown(
-                f"<div style='padding-top:8px'>{badge('verified', 'verified')}</div>",
-                unsafe_allow_html=True,
-            )
-
-    if st.button("Save as default to .env (encrypted)", key="byok_save_default"):
-        ok, msg = persist_byok_to_env(st.session_state.get(BYOK_KEY, ""))
-        (st.success if ok else st.error)(msg)
-
-
-def _render_abacus_byok_section() -> None:
-    st.markdown("**BYOK — Abacus.AI API key**")
-    cols = st.columns([4, 1, 1])
-    with cols[0]:
-        new_key = st.text_input(
-            "Abacus.AI API key",
-            value=st.session_state.get(ABACUS_BYOK_KEY, ""),
-            type="password",
-            label_visibility="collapsed",
-            placeholder="ABACUS API key (ChatLLM Teams subscription required)",
-            key="abacus_byok_input",
-        )
-        if new_key != st.session_state.get(ABACUS_BYOK_KEY, ""):
-            st.session_state[ABACUS_BYOK_KEY] = new_key
-            st.session_state[ABACUS_BYOK_VERIFIED_KEY] = False
-
-    with cols[1]:
-        if st.button("Verify", use_container_width=True, key="abacus_verify_btn"):
-            ok, msg = _verify_abacus_key(st.session_state.get(ABACUS_BYOK_KEY, ""))
-            st.session_state[ABACUS_BYOK_VERIFIED_KEY] = ok
-            if not ok:
-                st.error(msg or "Verification failed.")
-
-    with cols[2]:
-        if st.session_state.get(ABACUS_BYOK_VERIFIED_KEY):
-            st.markdown(
-                f"<div style='padding-top:8px'>{badge('verified', 'verified')}</div>",
-                unsafe_allow_html=True,
-            )
-
-    if st.button("Save as default to .env (encrypted)", key="abacus_save_default"):
-        ok, msg = persist_abacus_byok_to_env(
-            st.session_state.get(ABACUS_BYOK_KEY, "")
-        )
-        (st.success if ok else st.error)(msg)
 
 
 def _render_model_selectors(mode: str) -> None:
@@ -723,8 +829,8 @@ def _render_sending_mode_section() -> tuple[str, bool]:
             "<li>Automatic mailbox rotation</li>"
             "<li>Apollo's bounce auto-handling</li>"
             "</ul>"
-            "Reply tracking falls back to local IMAP polling (requires IMAP "
-            "credentials in <code>.env</code>).<br><br>"
+            "Reply tracking falls back to local IMAP polling (requires the IMAP "
+            "password under <strong>⚙ Settings → Credentials</strong>).<br><br>"
             "If you're sending more than 5 emails, use Apollo mode."
             "</div>",
             unsafe_allow_html=True,
@@ -737,7 +843,7 @@ def _render_sending_mode_section() -> tuple[str, bool]:
     return sending_mode, smtp_ack
 
 
-def _render_sending_section() -> tuple[int, int]:
+def _render_sending_section() -> None:
     st.subheader("Sending")
 
     inboxes = _parse_inboxes_config()
@@ -754,90 +860,22 @@ def _render_sending_section() -> tuple[int, int]:
             unsafe_allow_html=True,
         )
 
-    cols = st.columns(2)
-    daily_cap = cols[0].number_input(
-        "Daily cap per inbox", value=20, min_value=1, step=1, key="daily_cap"
-    )
-    pace_seconds = cols[1].number_input(
-        "Pace (seconds between sends)", value=90, min_value=10, step=5, key="pace_seconds"
-    )
-
+    # Sending limits are workspace-wide and live on the Settings page; show a
+    # read-only summary here so the campaign screen stays purely about content.
+    cap = get_daily_cap()
+    pace = config_int("PACE_SECONDS", 90)
+    ramp = get_ramp_schedule()
+    ramp_txt = " · ".join(f"Week {r['week']} → {r['cap']}/day" for r in ramp)
     st.markdown(
         '<div class="ts-amber">'
-        "<strong>Ramp schedule:</strong> Week 1 → 10/day per inbox · "
-        "Week 2 → 15/day · Week 3+ → 20/day. The cap above only applies once "
-        "the post-ramp window is reached, unless DAILY_CAP_PER_INBOX is set "
-        "explicitly in <code>.env</code>."
+        f"<strong>Sending limits</strong> (apply to every campaign): up to "
+        f"<strong>{cap}/day per inbox</strong>, one send every "
+        f"<strong>{pace}s</strong>.<br>"
+        f"New inboxes warm up gradually — {ramp_txt}.<br>"
+        "Adjust these in <strong>⚙ Settings → Sending &amp; ramp</strong>."
         "</div>",
         unsafe_allow_html=True,
     )
-
-    return int(daily_cap), int(pace_seconds)
-
-
-def _render_actions(
-    *,
-    name: str,
-    mode: str,
-    sending_mode: str = "apollo",
-    smtp_ack: bool = False,
-    auto_approve_mode: str = "after_warmup",
-    warmup_threshold: int = 20,
-    daily_cap: int,
-    pace_seconds: int,
-) -> None:
-    cols = st.columns(2)
-
-    # V1.5: when SMTP-direct is picked, the ack checkbox must be ticked
-    # before saving. Apollo mode has no such friction.
-    save_blocked = sending_mode == "smtp_direct" and not smtp_ack
-    save_help = (
-        "Tick the SMTP confirmation checkbox above to enable save."
-        if save_blocked
-        else None
-    )
-
-    if cols[0].button(
-        "Save as draft",
-        use_container_width=True,
-        disabled=save_blocked,
-        help=save_help,
-    ):
-        if not name.strip():
-            st.error("Campaign name required.")
-            return
-        try:
-            _save_campaign(
-                name=name.strip(), mode=mode, sending_mode=sending_mode,
-                auto_approve_mode=auto_approve_mode,
-                warmup_threshold=warmup_threshold,
-            )
-            set_campaign(name.strip())
-            st.success(f"Saved campaign '{name}' as draft.")
-        except Exception as e:
-            st.error(f"Save failed: {e}")
-
-    if cols[1].button(
-        "Save and generate drafts",
-        use_container_width=True,
-        type="primary",
-        disabled=save_blocked,
-        help=save_help,
-    ):
-        if not name.strip():
-            st.error("Campaign name required.")
-            return
-        if (
-            st.session_state.get("source_type") == "Apollo CSV upload"
-            and st.session_state.get("uploaded_df") is None
-        ):
-            st.error("Upload an Apollo file first.")
-            return
-        _save_and_generate(
-            name=name.strip(), mode=mode, sending_mode=sending_mode,
-            auto_approve_mode=auto_approve_mode,
-            warmup_threshold=warmup_threshold,
-        )
 
 
 # ---------- helpers ----------

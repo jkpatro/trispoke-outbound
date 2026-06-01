@@ -21,6 +21,8 @@ dependencies = [
     "openai",
     "cryptography>=48.0.0",
     "psycopg[binary]>=3.3.4",
+    "supabase>=2.9.0",
+    "streamlit-cookies-controller>=0.0.4",
 ]
 
 [dependency-groups]

@@ -35,23 +35,32 @@ _PIPELINE_ORDER = [
 
 
 def render() -> None:
-    st.title("Dashboard")
-    st.caption("Live state of the autonomous pipeline across all campaigns.")
+    # Compact one-line header (st.title + caption wasted two rows and forced a
+    # scroll). The whole dashboard is tuned to fit a laptop viewport without
+    # vertical scrolling.
+    st.markdown(
+        "##### 📊 Dashboard "
+        "<span style='font-size:12px;opacity:.55;font-weight:400'>"
+        "&nbsp;· live pipeline state across all campaigns</span>",
+        unsafe_allow_html=True,
+    )
 
     with get_session() as session:
         _render_kpi_row(session)
-        st.divider()
-        _render_pipeline_depth(session)
-        st.divider()
 
-        cols = st.columns(2)
-        with cols[0]:
-            _render_slot_pool(session)
-        with cols[1]:
+        # Row 1: pipeline depth + replies, side by side.
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            _render_pipeline_depth(session)
+        with c2:
             _render_reply_breakdown(session)
 
-        st.divider()
-        _render_campaign_policies(session)
+        # Row 2: slot pool (narrow) + campaign policies table (wide).
+        c3, c4 = st.columns([1, 2.4], gap="medium")
+        with c3:
+            _render_slot_pool(session)
+        with c4:
+            _render_campaign_policies(session)
 
 
 # ---------- KPI strip ----------
@@ -118,7 +127,7 @@ def _bounce_rate(session) -> tuple[float, int]:
 
 
 def _render_pipeline_depth(session) -> None:
-    st.subheader("Pipeline depth")
+    st.markdown("**Pipeline depth**")
     counts = {s: 0 for s in _PIPELINE_ORDER}
     for status, n in (
         session.query(Lead.status, _count(Lead.id))
@@ -135,7 +144,7 @@ def _render_pipeline_depth(session) -> None:
     if df.empty:
         st.info("No leads yet. Start by uploading a CSV in Campaigns.")
     else:
-        st.bar_chart(df, height=240)
+        st.bar_chart(df, height=200)
 
 
 def _count(col):
@@ -147,7 +156,7 @@ def _count(col):
 
 
 def _render_slot_pool(session) -> None:
-    st.subheader("Apollo slot pool")
+    st.markdown("**Apollo slot pool**")
     rows = session.query(ApolloSlot).order_by(ApolloSlot.id.asc()).all()
     if not rows:
         st.info(
@@ -177,7 +186,7 @@ def _render_slot_pool(session) -> None:
 
 
 def _render_reply_breakdown(session) -> None:
-    st.subheader("Replies — last 30 days")
+    st.markdown("**Replies — last 30 days**")
     cutoff = datetime.utcnow() - timedelta(days=30)
     rows = (
         session.query(Reply.classification, _count(Reply.id))
@@ -191,14 +200,14 @@ def _render_reply_breakdown(session) -> None:
     df = pd.DataFrame(rows, columns=["classification", "count"]).set_index(
         "classification"
     )
-    st.bar_chart(df, height=240)
+    st.bar_chart(df, height=200)
 
 
 # ---------- per-campaign policies + state ----------
 
 
 def _render_campaign_policies(session) -> None:
-    st.subheader("Campaigns")
+    st.markdown("**Campaigns**")
     campaigns = session.query(Campaign).order_by(Campaign.created_at.desc()).all()
     if not campaigns:
         st.info("No campaigns yet.")
@@ -230,4 +239,7 @@ def _render_campaign_policies(session) -> None:
             "Warmup progress": warmup_progress,
         })
 
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    # Capped height: the table scrolls internally instead of growing the page.
+    st.dataframe(
+        pd.DataFrame(rows), hide_index=True, use_container_width=True, height=180
+    )

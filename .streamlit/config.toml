@@ -1,0 +1,11 @@
+[client]
+# Hide the top-right toolbar (the "Deploy" button + the ⋮ main menu).
+# "minimal" shows the toolbar only when the app is in an error state, so
+# end users never see Deploy / developer options.
+toolbarMode = "minimal"
+
+# Kill Streamlit's auto-generated multipage nav (the page links from the
+# `pages/` folder). We navigate via our own floating ☰ Menu instead. Setting
+# this in config removes it at the source, so it never flashes on first paint
+# the way CSS-hiding it did.
+showSidebarNavigation = false

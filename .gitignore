@@ -23,6 +23,9 @@ MANIFEST
 # Environment files
 .env
 
+# Streamlit secrets (legacy — held Google OAuth creds; no longer used by the app)
+.streamlit/secrets.toml
+
 # Data and logs
 data/
 logs/
@@ -45,3 +48,9 @@ logs/
 # Dated handoff notes (may reference credential prefixes — keep local-only)
 HANDOFF_*.md
 SESSION_*.md
+
+# Runtime logs (e.g. streamlit_run.log / streamlit_err.log)
+*.log
+
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json

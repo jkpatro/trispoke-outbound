@@ -1,9 +1,16 @@
 from functools import lru_cache
+
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+# Make `.env` values visible via os.environ for any caller (push worker, etc.),
+# not only via the Settings model. Pydantic-settings reads `.env` into the
+# model but doesn't pollute os.environ on its own.
+load_dotenv(override=False)
 
 
 class Settings(BaseSettings):
-    apollo_api_key: str
+    apollo_api_key: str | None = None
     # V1.5: Apollo-out controls
     apollo_poll_interval_seconds: int = 900
     apollo_max_enrollments_per_minute: int = 25
@@ -33,6 +40,19 @@ class Settings(BaseSettings):
     imap_username: str | None = None
     imap_password: str | None = None
     daily_cap_per_inbox: int = 20
+
+    # Supabase Auth (GoTrue) — email + password sign-in. Required for the
+    # Streamlit login screen. supabase_anon_key accepts BOTH the legacy JWT
+    # (eyJ...) and modern publishable key (sb_publishable_...) formats. Leave
+    # both blank to keep auth disabled and run the UI with no login screen
+    # (dev-only open access).
+    supabase_url: str | None = None
+    supabase_anon_key: str | None = None
+    # Service-role secret (Supabase → Project Settings → API → service_role).
+    # Server-side only — never exposed to the browser. Required for admin
+    # password resets and for self-signup (admin.create_user). Leave blank to
+    # disable those privileged operations.
+    supabase_service_role_key: str | None = None
 
     # DB: prefer DATABASE_URL when set (Postgres in Docker prod);
     # fall back to a SQLite file at database_path for bare-metal dev.

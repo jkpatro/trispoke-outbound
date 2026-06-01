@@ -56,6 +56,34 @@ The IMAP poller, sender loop, and Ollama keep running in their own windows in th
 
 ---
 
+## Sign in (Supabase Auth — email + password)
+
+The Streamlit UI is gated behind Supabase Auth (GoTrue) email + password sign-in. Two roles exist — admin and user — and only admins see the Settings and Users pages. The login is your email (e.g. a Gmail address); there is no Google OAuth. `jkpatro@gmail.com` bootstraps as admin.
+
+**One-time Supabase setup:**
+
+1. **Apply the migrations.** Paste each of these into Supabase → SQL Editor → Run, in order: [scripts/supabase_auth_schema.sql](scripts/supabase_auth_schema.sql), [scripts/supabase_secrets_and_profile.sql](scripts/supabase_secrets_and_profile.sql), [scripts/supabase_user_management.sql](scripts/supabase_user_management.sql), [scripts/supabase_switch_to_streamlit_auth.sql](scripts/supabase_switch_to_streamlit_auth.sql), then [scripts/supabase_email_password_auth.sql](scripts/supabase_email_password_auth.sql) (adds `profiles.auth_uid`). All are idempotent.
+2. **Add the env vars** to `.env`:
+   ```
+   SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+   SUPABASE_ANON_KEY=sb_publishable_...        # Project Settings → API
+   SUPABASE_SERVICE_ROLE_KEY=sb_secret_...     # Project Settings → API → service_role
+   ```
+   The service-role key is server-side only. It's required for admin password resets and self-signup (which provisions accounts without an email round-trip). Leaving `SUPABASE_URL`/`SUPABASE_ANON_KEY` blank disables the login gate entirely (dev fallback — the app runs as a faux-admin).
+3. **Bootstrap the first admin's password.** The owner account may predate password sign-in, so set it once from the CLI:
+   ```
+   uv run python scripts/set_user_password.py jkpatro@gmail.com
+   ```
+   (Prompts for a password; works whether or not the GoTrue user already exists.)
+
+**Daily use:** launch the app → email + password card → sign in. A hard browser refresh keeps you signed in (the refresh token is stored in a cookie). The header shows your name + role badge + Edit profile (which includes **Change password**) + Sign out.
+
+### User management
+
+New people **self-register** from the login screen's *Create account* tab; their account lands **pending admin approval** and they see a holding screen until an admin activates them on the Users page. Admins can also **pre-invite** an email + role (the account skips approval and inherits that role on first sign-in).
+
+From the Users page admins can change roles, activate/deactivate accounts, revoke invitations, and **reset any user's password** (including their own) — the user can then change it from their profile. The workspace is protected from being orphaned — you cannot demote or deactivate the last active admin. Forgotten passwords are recovered by an admin reset; there is no email-based reset flow.
+
 ## Configuring Apollo mailboxes (V1.5)
 
 V1.5 sends via your Apollo workspace's connected mailboxes — Apollo handles warmup pacing, rotation, and bounce/reply tracking. You don't need SMTP credentials in `.env` for the Apollo-out path.
@@ -136,15 +164,17 @@ The Abacus BYOK key entered through the UI follows the same Fernet at-rest encry
 
 ## BYOK at-rest encryption
 
-The Anthropic API key entered in the UI's BYOK section lives only in Streamlit `session_state` by default — in-process memory, dies with the session. Clicking **Save as default to .env (encrypted)** persists it as `ANTHROPIC_API_KEY_ENC` using Fernet symmetric encryption. The plaintext is **never** written to disk via the UI.
+BYOK keys (Anthropic, Abacus, Apollo, etc.) and the reply webhook URL live on a global **Settings** page available to admins. Values entered there are Fernet-encrypted at rest in the `app_secrets` Postgres table — never written to disk as plaintext, never echoed back to the UI in cleartext. The application reads secrets via a DB-first resolver (`trispoke.secrets_store.secret(...)`) that falls through to `os.environ` and then to a caller-supplied default, so an env-only deployment still works unchanged.
 
-To enable persisting, export a Fernet key first:
+The master key is `TRISPOKE_SECRET_KEY` — a Fernet symmetric key the app uses to encrypt/decrypt every row in `app_secrets`. Generate one:
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-Add it to your shell profile or `.env` as `TRISPOKE_SECRET_KEY=<that value>`. Without it, the persist action refuses.
+Add it to your shell profile or `.env` as `TRISPOKE_SECRET_KEY=<that value>`. Without it, the Settings page refuses to persist new secrets.
+
+**Rotating `TRISPOKE_SECRET_KEY` invalidates every stored secret** — they were encrypted under the old key and cannot be decrypted under the new one. The **Stored secrets** panel on the Settings page surfaces this with a decrypt-health badge per row, so you can see at a glance which entries need to be re-entered after a rotation.
 
 ---
 

@@ -14,6 +14,7 @@ import streamlit as st
 from streamlit_quill import st_quill
 
 from trispoke.db.models import Email
+from trispoke.secrets_store import secret
 from trispoke.ui.utils.styling import badge
 
 
@@ -129,9 +130,9 @@ def _render_enhance_panel(email_id: int, *, key_prefix: str) -> Optional[Enhance
 
     s = get_settings()
     engine_options = ["Local (qwen3)"]
-    if s.anthropic_api_key:
+    if secret("ANTHROPIC_API_KEY", s.anthropic_api_key):
         engine_options.append("Claude")
-    if s.abacus_api_key:
+    if secret("ABACUS_API_KEY", s.abacus_api_key):
         engine_options.append("Abacus")
 
     cols = st.columns([2, 2, 2])

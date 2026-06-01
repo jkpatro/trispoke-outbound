@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from trispoke.apollo.client import ApolloClient
+from trispoke.app_config import config_int
 from trispoke.config import get_settings
 from trispoke.db.event_log import log_event
 from trispoke.db.models import (
@@ -101,9 +102,12 @@ class ApolloEventsPoller:
         return counts
 
     def run(self) -> None:
-        interval = self.settings.apollo_poll_interval_seconds
-        print(f"Apollo events poller (slot-pool) started (every {interval}s). Ctrl+C to stop.")
+        print("Apollo events poller (slot-pool) started. Ctrl+C to stop.")
         while self.running:
+            interval = config_int(
+                "APOLLO_POLL_INTERVAL_SECONDS",
+                self.settings.apollo_poll_interval_seconds,
+            )
             try:
                 counts = self.run_once()
                 if counts:
@@ -205,9 +209,10 @@ class ApolloEventsPoller:
                 # Fire the webhook for positive replies (Slack / Zapier / etc).
                 if classification == "positive":
                     from trispoke.db.models import Campaign as _C
+                    from trispoke.secrets_store import secret as _secret
                     campaign = session.get(_C, email.campaign_id)
                     notify_positive_reply(
-                        self.settings.reply_webhook_url,
+                        _secret("REPLY_WEBHOOK_URL", self.settings.reply_webhook_url),
                         campaign=campaign.name if campaign else "(unknown)",
                         lead_email=lead.email,
                         lead_name=(

@@ -23,6 +23,7 @@ from openai import (
 )
 
 from trispoke.config import get_settings
+from trispoke.secrets_store import secret
 
 
 class AbacusAuthError(Exception):
@@ -41,9 +42,10 @@ class AbacusClient:
 
     def __init__(self) -> None:
         settings = get_settings()
-        if not settings.abacus_api_key:
+        key = secret("ABACUS_API_KEY", settings.abacus_api_key)
+        if not key:
             raise AbacusAuthError("ABACUS_API_KEY missing or invalid")
-        self.api_key = settings.abacus_api_key
+        self.api_key = key
         self.base_url = settings.abacus_base_url
         self.default_model = settings.abacus_model
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
